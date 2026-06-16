@@ -1,4 +1,6 @@
-# SFT Refactor: Search-Agent Fine-Tuning Pipeline
+# A Simple Search-Agent 
+
+## (SFT) Fine-Tuning Pipeline
  
 A pipeline for synthesizing, filtering, and fine-tuning a Qwen2.5-Instruct model to perform multi-turn tool-use (web search / Wikipedia retrieval) reasoning on HotpotQA-style question answering, following a Search-R1 / R1-Searcher-style `<think>/<tool_call>/<tool_response>/<answer>` format.
  
@@ -11,7 +13,7 @@ A pipeline for synthesizing, filtering, and fine-tuning a Qwen2.5-Instruct model
 ## Project Structure
  
 ```
-sft_refactor/
+src/
 ├── tools.py                          # Search/retrieval tools and schemas
 ├── train.py                          # LoRA SFT training script
 ├── data/
