@@ -1,4 +1,4 @@
-# A Simple Search-Agent (**Under Development**)
+# A Simple Search-Agent (Under Development)
 
 ## (SFT) Fine-Tuning Pipeline
  
@@ -12,15 +12,4 @@ A pipeline for synthesizing, filtering, and fine-tuning a Qwen2.5-Instruct model
 4. **Evaluation** (`evals/compare_answers.py`) — generates trajectories with the fine-tuned model and computes exact-match accuracy against gold answers.
 ## Project Structure
  
-```
-src/
-├── tools.py                          # Search/retrieval tools and schemas
-├── train.py                          # LoRA SFT training script
-├── data/
-│   ├── synthesis/
-│   │   └── trajectory_collection.py  # Generate trajectories via tool-use rollouts
-│   └── post_processing/
-│       └── trajectories.py           # Validate, filter, and save trajectories
-└── evals/
-    └── compare_answers.py            # Exact-match evaluation
-```
+python3 -m src.data.synthesis.trajectory_collection
