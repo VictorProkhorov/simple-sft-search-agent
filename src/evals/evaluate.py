@@ -35,7 +35,7 @@ class EvalResult:
                     Exact Match (EM):        {self.correctness.exact_match:.3f}
                     Case-Insensitive (EM):   {self.correctness.case_insensitive_em:.3f}
                     Semantic Sim (Semantic Answer Similarity):       {self.correctness.semantic_similarity_sas or 'N/A'}
-                    Semantic Sim (LLM-as-a-Judge):       {'N/A'}
+                    Semantic Sim (LLM-as-a-Judge):       {self.correctness.semantic_similarity_judge or 'N/A'}
                 """
 
     
@@ -46,7 +46,8 @@ class Evaluator:
     def __init__(self,
                 trajectories_path:str='',
                 answers_path:str='',
-                compute_semantic_sas: bool = False):
+                compute_semantic_sas: bool = False,
+                compute_semantic_judge: bool = False):
     
         print("Loading trajectories...", file=sys.stderr)
         self.trajectories:  List[List[Dict]] = self.load_trajectories(trajectories_path)
@@ -54,7 +55,8 @@ class Evaluator:
         print("Loading gold answers...", file=sys.stderr)
         self.gold_answers: List[str] = self.load_gold_answers(answers_path)
 
-        self.answer_correctness_evaluator = CorrectnessEvaluator(compute_semantic_sas=compute_semantic_sas)
+        self.answer_correctness_evaluator = CorrectnessEvaluator(compute_semantic_sas=compute_semantic_sas,
+                                                                compute_semantic_judge=compute_semantic_judge)
 
 
     
@@ -74,10 +76,15 @@ class Evaluator:
             self.extract_answer(traj) 
             for traj in self.trajectories
         ]
+
+        questions = [
+            self.extract_question(traj)
+            for traj in self.trajectories
+        ]
         
         # Compute metrics
         correctness = self.answer_correctness_evaluator.compute_correctness(
-            self.gold_answers, predicted_answers
+            self.gold_answers, predicted_answers, questions
         )
         """
         grounding = GroundingEvaluator.compute_grounding(trajectories, gold_answers)
@@ -123,6 +130,8 @@ class Evaluator:
             efficiency=efficiency,
             trajectory_analyses=analyses
         )
+
+
     @staticmethod
     def load_trajectories(file_path: str) -> List[List[Dict]]:
         """Load trajectory data (JSONL format)"""
@@ -142,9 +151,6 @@ class Evaluator:
                 answers.append(line.strip())
         return answers
  
- 
-
-    
     
     @staticmethod
     def extract_tool_calls(trajectory: List[Dict]) -> List[Dict]:
@@ -183,36 +189,15 @@ class Evaluator:
                     return match.group(1).strip()
         return None
     
+    def extract_question(self, trajectory: List[Dict]):
+        question = trajectory[0]['content'].split('Question:')[1].strip()
+        #print(question)
+        #exit()
+        return question
+    
 
     
-    @staticmethod
-    def error_analysis(result: ComprehensiveEvalResult, 
-                      top_n: int = 10) -> Dict:
-        """Analyze failure patterns"""
-        failures = [a for a in result.trajectory_analyses if not a.is_correct]
-        failures.sort(key=lambda x: len(x.retrieved_docs[0]) if x.retrieved_docs else 0, reverse=True)
-        
-        patterns = {
-            'missing_reasoning': sum(1 for a in failures if not a.reasoning),
-            'no_tool_use': sum(1 for a in failures if len(a.tool_calls) == 0),
-            'unsupported_answer': sum(1 for a in failures if not a.answer_supported),
-            'extraction_failed': sum(1 for a in failures if a.predicted_answer is None),
-        }
-        
-        return {
-            'total_failures': len(failures),
-            'patterns': patterns,
-            'top_failures': [
-                {
-                    'question_id': a.question_id,
-                    'gold': a.gold_answer,
-                    'predicted': a.predicted_answer,
-                    'tool_calls': len(a.tool_calls),
-                    'supported': a.answer_supported,
-                }
-                for a in failures[:top_n]
-            ]
-        }
+    
  
 
 def main():
@@ -226,7 +211,8 @@ def main():
     
     evaluator = Evaluator(trajectories_path=trajectories_path,
                         answers_path=gold_answers_path,
-                        compute_semantic_sas=True)
+                        compute_semantic_sas=True,
+                        compute_semantic_judge=True)
     result = evaluator.evaluate()
     print(result.summary())
 

@@ -1,16 +1,42 @@
 
 import re
 import json
+from tqdm import tqdm
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple, Optional, Any
 from collections import defaultdict
  
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoModelForCausalLM, AutoTokenizer
 
  
 
+JUDGE_PROMPT = """You are an expert evaluator comparing a predicted answer to a gold reference answer.
+ 
+Your task: Rate how well the predicted answer matches the gold answer on a scale of 1 to 4.
+ 
+Evaluation criteria:
+- Factual alignment: Does the predicted answer contain the same key facts as the gold answer?
+- Coverage: Does it cover the main points in the gold answer?
+- Accuracy: Are there any factual errors or contradictions with the gold answer?
+- Completeness: Does it capture the core content, or are significant aspects missing?
+ 
+Scale:
+1: Factually incorrect, contradicts gold answer, or completely misses the core content
+2: Contains some correct elements but misses key facts or has significant gaps compared to gold
+3: Mostly aligns with gold answer but lacks detail or has minor omissions
+4: Accurately captures the gold answer—same key facts, well-articulated, complete
+ 
+Question: {question}
+ 
+Gold Answer: {gold_answer}
+ 
+Predicted Answer: {predicted_answer}
+ 
+Compare the predicted answer to the gold answer. Provide your evaluation in exactly this format:
+Evaluation: [How well does predicted match gold? What's correct/missing/wrong?]
+Rating: [1, 2, 3, or 4]"""
 
 
 
@@ -21,13 +47,14 @@ class CorrectnessMetrics:
     token_f1: float
     semantic_similarity_sas: Optional[float] = None
     case_insensitive_em: float = 0.0
-    substring_match: float = 0.0
+    semantic_similarity_judge: Optional[float] = None
     
     def to_dict(self):
         return {
             'exact_match': self.exact_match,
             'token_f1': self.token_f1,
             'semantic_similarity_sas': self.semantic_similarity_sas,
+            'semantic_similarity_judge': self.semantic_similarity_judge,
             'case_insensitive_em': self.case_insensitive_em,
         }
  
@@ -35,13 +62,31 @@ class CorrectnessMetrics:
 
 class CorrectnessEvaluator:
     """Compute answer correctness metrics"""
-    def __init__(self, compute_semantic_sas: bool = False):
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    def __init__(self,
+                compute_semantic_sas: bool = False,
+                compute_semantic_judge: bool = False):
+        self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         
-        sas_model_name: str = "cross-encoder/stsb-roberta-large"
-        self.sas_tokenizer = AutoTokenizer.from_pretrained(sas_model_name)
-        self.sas_model = AutoModelForSequenceClassification.from_pretrained(sas_model_name).to(device)
+        # SAS Model
+        sas_model_name = "cross-encoder/stsb-roberta-large"
+        self.sas_tokenizer,  self.sas_model = self._load_model(sas_model_name)
         self.compute_semantic_sas = compute_semantic_sas
+
+        # Judge Model
+        judge_model_name = "Qwen/Qwen2.5-3B-Instruct"
+        self.judge_tokenizer,  self.judge_model = self._load_model(judge_model_name, is_causal=True)
+        self.compute_semantic_judge = compute_semantic_judge
+
+    def _load_model(self,
+                    model_name:str,
+                    is_causal: bool = False):
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        if is_causal:
+            model = AutoModelForCausalLM.from_pretrained(model_name).to(self.device)
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(model_name).to(self.device)
+        model.eval()
+        return tokenizer, model
 
     
     def exact_match(self,
@@ -91,8 +136,7 @@ class CorrectnessEvaluator:
         if pred is None:
             return None
         
-        inputs = self.sas_tokenizer(gold, pred, padding=True, return_tensors="pt")
-        inputs = {k:v.to(self.sas_model.device) for k, v in inputs.items()}
+        inputs = self.sas_tokenizer(gold, pred, padding=True, return_tensors="pt").to(self.device)
         with torch.no_grad():
             outputs = self.sas_model(**inputs)
         
@@ -102,16 +146,62 @@ class CorrectnessEvaluator:
         
             
    
-    def semantic_similarity_via_judge(self,
+    def eval_semantic_similarity_judge(self,
+                                    question:str,
                                     gold: str,
-                                    pred: Optional[str],
+                                    pred: str,
                                     ) -> float:
-        """To Do"""
-        pass
+        prompt = JUDGE_PROMPT.format(
+                question=question,
+                gold_answer=gold,
+                predicted_answer=pred,
+            )
+            
+        inputs = self.judge_tokenizer(prompt, return_tensors="pt").to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.judge_model.generate(
+                                **inputs,
+                                max_new_tokens=150,
+                                do_sample=False)
+            
+        judge_response = self.judge_tokenizer.decode(
+                            outputs[0][inputs["input_ids"].shape[1]:],
+                            skip_special_tokens=True).strip()
+            
+        rating = self._extract_rating(judge_response)
+        #print(rating)
+        return rating/4
+
+    def _extract_rating(self, response: str) -> Optional[float]:
+   
+        """
+        Extract numeric rating from judge response.
+        
+        Looks for 'Rating: N' where N is 1-4.
+        """
+        try:
+            for line in response.split("\n"):
+                if "Rating:" in line or "rating:" in line:
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        rating_str = parts[-1].strip()
+                        rating = float(rating_str.split()[0])
+                        if 1.0 <= rating <= 4.0:
+                            return rating
+            
+            return 0.
+        
+        except Exception:
+            return 0.
+
+        
+
     
     def compute_correctness(self,
                            gold_answers: List[str], 
                            predicted_answers: List[str],
+                           questions: List[str]
                            ) -> CorrectnessMetrics:
     
         """Compute all answer correctness metrics"""
@@ -123,7 +213,7 @@ class CorrectnessEvaluator:
         ci_ems = [self.case_insensitive_match(g, p) for g, p in zip(gold_answers, predicted_answers)]
       
         
-        sas_sims = None
+        
         if self.compute_semantic_sas:
             sas_sims = [self.eval_semantic_similarity_sas(g, p) for g, p in zip(gold_answers, predicted_answers)]
             sas_sims = [s for s in sas_sims if s is not None]
@@ -131,11 +221,20 @@ class CorrectnessEvaluator:
             
         else:
             semantic_sim_sas = None
+
+        if self.compute_semantic_judge:
+            judge_sims = [self.eval_semantic_similarity_judge(q, g, p) for g, p, q in tqdm(zip(gold_answers, predicted_answers, questions))]
+            judge_sims = [s for s in judge_sims if s is not None]
+            semantic_sim_judge = np.mean(judge_sims) if judge_sims else None
+        else:
+            semantic_sim_judge = None
+
         
         return CorrectnessMetrics(
             exact_match=np.mean(ems),
             token_f1=np.mean(f1s),
             semantic_similarity_sas=semantic_sim_sas,
+            semantic_similarity_judge=semantic_sim_judge,
             case_insensitive_em=np.mean(ci_ems),
         )
  
