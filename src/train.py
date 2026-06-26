@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-import bitsandbytes as bnb
+#import bitsandbytes as bnb
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, TrainerCallback
 from peft import get_peft_model, LoraConfig, TaskType
 from datasets import load_from_disk, Dataset
@@ -116,10 +116,10 @@ def get_model(model_id:str,
 
     lora_config = LoraConfig(
     r=16,
-    lora_alpha=16,           # ratio 1:1 — stable
+    lora_alpha=16, # ratio 1:1 — stable
     target_modules=[
-        "q_proj", "k_proj", "v_proj", "o_proj",   # attention
-        "gate_proj", "up_proj", "down_proj"         # MLP
+        "q_proj", "k_proj", "v_proj", "o_proj", # attention
+        "gate_proj", "up_proj", "down_proj" # MLP
     ],
     lora_dropout=0.0,
     bias="none",
