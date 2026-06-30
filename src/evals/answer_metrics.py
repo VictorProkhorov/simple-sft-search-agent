@@ -41,7 +41,7 @@ Rating: [1, 2, 3, or 4]"""
 
 
 @dataclass
-class CorrectnessMetrics:
+class Answer_Metrics:
     """Answer accuracy metrics"""
     exact_match: float
     token_f1: float
@@ -60,7 +60,7 @@ class CorrectnessMetrics:
  
 
 
-class CorrectnessEvaluator:
+class Answer_Evaluator:
     """Compute answer correctness metrics"""
     def __init__(self,
                 compute_semantic_sas: bool = False,
@@ -195,14 +195,27 @@ class CorrectnessEvaluator:
         except Exception:
             return 0.
 
-        
+    def eval_answer_attribution(self,
+                                question:str,
+                                retrieved_content:List[str],
+                                pred_answer:str) -> int:
+
+        return
+    
+    def _extract_retrieved_content(self, trajectory: List[Dict]) -> str:
+        """Extract all retrieved/searched content from trajectory"""
+        content = []
+        for msg in trajectory:
+            if msg.get('role') == 'tool':
+                content.append(msg.get('content', ''))
+        return '\n'.join(content)
 
     
-    def compute_correctness(self,
-                           gold_answers: List[str], 
-                           predicted_answers: List[str],
-                           questions: List[str]
-                           ) -> CorrectnessMetrics:
+    def compute(self,
+                gold_answers: List[str], 
+                predicted_answers: List[str],
+                questions: List[str]
+                ) -> CorrectnessMetrics:
     
         """Compute all answer correctness metrics"""
         assert len(gold_answers) == len(predicted_answers), "Length mismatch"
@@ -212,7 +225,6 @@ class CorrectnessEvaluator:
         f1s = [self.token_f1(g, p) for g, p in zip(gold_answers, predicted_answers)]
         ci_ems = [self.case_insensitive_match(g, p) for g, p in zip(gold_answers, predicted_answers)]
       
-        
         
         if self.compute_semantic_sas:
             sas_sims = [self.eval_semantic_similarity_sas(g, p) for g, p in zip(gold_answers, predicted_answers)]
@@ -230,7 +242,7 @@ class CorrectnessEvaluator:
             semantic_sim_judge = None
 
         
-        return CorrectnessMetrics(
+        return Answer_Metrics(
             exact_match=np.mean(ems),
             token_f1=np.mean(f1s),
             semantic_similarity_sas=semantic_sim_sas,

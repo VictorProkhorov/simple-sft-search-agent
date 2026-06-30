@@ -4,25 +4,22 @@ import json
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from .answer_correctness_metrics import CorrectnessEvaluator
+from .answer_metrics import Answer_Evaluator, Answer_Metrics
+from .trajectory_metrics import Trajectory_Evaluator, Trajectory_Metrics
 
 
 @dataclass
-class EvalResult:
+class Eval_Result:
     """Full evaluation result"""
-    correctness: CorrectnessMetrics
-    grounding: GroundingMetrics
-    reliability: ReliabilityMetrics
-    efficiency: EfficiencyMetrics
-    trajectory_analyses: List[TrajectoryAnalysis] = field(default_factory=list)
+    answer: Answer_Metrics
+    trajectory: Trajectory_Metrics
     
     def to_dict(self) -> Dict:
         return {
-            'correctness': self.correctness.to_dict(),
-            'grounding': self.grounding.to_dict(),
-            'reliability': self.reliability.to_dict(),
-            'efficiency': self.efficiency.to_dict(),
+            'answer': self.answer.to_dict(),
+            'trajectory': self.trajectory.to_dict(),
         }
+
     def summary(self) -> str:
         """Human-readable summary"""
         return f"""
@@ -30,12 +27,21 @@ class EvalResult:
                 ║             EVALUATION SUMMARY             ║
                 ╚════════════════════════════════════════════╝
  
-                CORRECTNESS
-                    Token F1:           {self.correctness.token_f1:.3f}
-                    Exact Match (EM):        {self.correctness.exact_match:.3f}
-                    Case-Insensitive (EM):   {self.correctness.case_insensitive_em:.3f}
-                    Semantic Sim (Semantic Answer Similarity):       {self.correctness.semantic_similarity_sas or 'N/A'}
-                    Semantic Sim (LLM-as-a-Judge):       {self.correctness.semantic_similarity_judge or 'N/A'}
+                ANSWER
+                    Token F1:           {self.answer.token_f1:.3f}
+                    Exact Match (EM):        {self.answer.exact_match:.3f}
+                    Case-Insensitive (EM):   {self.answer.case_insensitive_em:.3f}
+                    Semantic Sim (Semantic Answer Similarity):       {self.answer.semantic_similarity_sas or 'N/A'}
+                    Semantic Sim (LLM-as-a-Judge):       {self.answer.semantic_similarity_judge or 'N/A'}
+                    
+                TRAJECTORY
+                    Answer Extraction Rate:            {self.trajectory.answer_format_rate:.3f}
+                    % of Trajectories with Reasoning:   {self.trajectory.has_reasoning:.3f}
+                    Av. Num. Reasoning Steps:           {self.trajectory.av_num_reasoning_steps: .3f}
+                    % of Trajectories with a Tool Call: {self.trajectory.has_tool_call: .3f}
+                    Av. Num. Tool Calls:                {self.trajectory.av_num_tool_calls: .3f}
+                    Tool Error Rate:                    {self.trajectory.tool_error_rate: .3f}
+                    Av. Num Convers. Turns:             {self.trajectory.av_num_turns_per_traj: .3f}     
                 """
 
     
@@ -55,20 +61,13 @@ class Evaluator:
         print("Loading gold answers...", file=sys.stderr)
         self.gold_answers: List[str] = self.load_gold_answers(answers_path)
 
-        self.answer_correctness_evaluator = CorrectnessEvaluator(compute_semantic_sas=compute_semantic_sas,
+        self.answer_correctness_evaluator = Answer_Evaluator(compute_semantic_sas=compute_semantic_sas,
                                                                 compute_semantic_judge=compute_semantic_judge)
 
-
+        self.trajectory_evaluator = Trajectory_Evaluator()
     
     def evaluate(self) -> ComprehensiveEvalResult:
-        """
-        Full evaluation pipeline.
-        
-        Args:
-            trajectories: List of message trajectories
-            gold_answers: Ground truth answers
-            compute_semantic: Whether to compute expensive semantic similarity
-        """
+       
         assert len(self.trajectories) == len(self.gold_answers), "Length mismatch"
         
         # Extract predicted answers
@@ -76,64 +75,26 @@ class Evaluator:
             self.extract_answer(traj) 
             for traj in self.trajectories
         ]
-
+        # Extract questions
         questions = [
             self.extract_question(traj)
             for traj in self.trajectories
         ]
         
         # Compute metrics
-        correctness = self.answer_correctness_evaluator.compute_correctness(
+        answer_correctness = self.answer_correctness_evaluator.compute(
             self.gold_answers, predicted_answers, questions
-        )
-        """
-        grounding = GroundingEvaluator.compute_grounding(trajectories, gold_answers)
-        reliability = ReliabilityEvaluator.compute_reliability(trajectories)
-        efficiency = EfficiencyEvaluator.compute_efficiency(trajectories)
         
-        # Per-trajectory analysis
-        analyses = []
-        for i, (traj, gold, pred) in enumerate(zip(trajectories, gold_answers, predicted_answers)):
-            tool_calls = GroundingEvaluator.extract_tool_calls(traj)
-            reasoning = ""
-            for msg in traj:
-                if msg.get('role') == 'assistant':
-                    match = re.search(r'<think>([\s\S]*?)</think>', msg.get('content', ''))
-                    if match:
-                        reasoning = match.group(1).strip()
-                        break
-            
-            is_correct = gold.strip().lower() == (pred.strip().lower() if pred else "")
-            retrieved = GroundingEvaluator.extract_retrieved_content(traj)
-            coverage = GroundingEvaluator.compute_coverage(gold, retrieved)
-            
-            analyses.append(TrajectoryAnalysis(
-                question_id=i,
-                gold_answer=gold,
-                predicted_answer=pred,
-                is_correct=is_correct,
-                tool_calls=tool_calls,
-                num_turns=len(traj),
-                reasoning=reasoning,
-                retrieved_docs=[retrieved],
-                answer_supported=coverage > 0.5
-            ))
-        """
-        grounding = None
-        reliability = None
-        efficiency = None
-        analyses = None
-        return EvalResult(
-            correctness=correctness,
-            grounding=grounding,
-            reliability=reliability,
-            efficiency=efficiency,
-            trajectory_analyses=analyses
+        )
+        trajectory = self.trajectory_evaluator.compute(self.trajectories)
+
+        return Eval_Result(
+            answer=answer_correctness,
+            trajectory=trajectory,
         )
 
 
-    @staticmethod
-    def load_trajectories(file_path: str) -> List[List[Dict]]:
+    def load_trajectories(self, file_path: str) -> List[List[Dict]]:
         """Load trajectory data (JSONL format)"""
         trajectories = []
         with open(file_path, 'r') as f:
@@ -142,8 +103,8 @@ class Evaluator:
                 trajectories.append(trajectory)
         return trajectories
  
-    @staticmethod
-    def load_gold_answers(file_path: str) -> List[str]:
+
+    def load_gold_answers(self, file_path: str) -> List[str]:
         """Load gold answer data (one per line)"""
         answers = []
         with open(file_path, 'r') as f:
@@ -152,34 +113,7 @@ class Evaluator:
         return answers
  
     
-    @staticmethod
-    def extract_tool_calls(trajectory: List[Dict]) -> List[Dict]:
-        """Extract all tool calls from trajectory"""
-        tool_calls = []
-        for msg in trajectory:
-            if msg.get('role') == 'assistant':
-                content = msg.get('content', '')
-                # Parse <tool_call> blocks
-                pattern = r'<tool_call>\s*(.*?)\s*</tool_call>'
-                for match in re.finditer(pattern, content, re.DOTALL):
-                    try:
-                        tool_call = json.loads(match.group(1))
-                        tool_calls.append(tool_call)
-                    except json.JSONDecodeError:
-                        continue
-        return tool_calls
-    
-    @staticmethod
-    def extract_retrieved_content(trajectory: List[Dict]) -> str:
-        """Extract all retrieved/searched content from trajectory"""
-        content = []
-        for msg in trajectory:
-            if msg.get('role') == 'tool':
-                content.append(msg.get('content', ''))
-        return '\n'.join(content)
-    
-    @staticmethod
-    def extract_answer(trajectory: List[Dict]) -> Optional[str]:
+    def extract_answer(self, trajectory: List[Dict]) -> Optional[str]:
         """Extract final answer from trajectory"""
         for msg in reversed(trajectory):
             if msg.get('role') == 'assistant':
@@ -191,11 +125,7 @@ class Evaluator:
     
     def extract_question(self, trajectory: List[Dict]):
         question = trajectory[0]['content'].split('Question:')[1].strip()
-        #print(question)
-        #exit()
         return question
-    
-
     
     
  
@@ -212,7 +142,7 @@ def main():
     evaluator = Evaluator(trajectories_path=trajectories_path,
                         answers_path=gold_answers_path,
                         compute_semantic_sas=True,
-                        compute_semantic_judge=True)
+                        compute_semantic_judge=False)
     result = evaluator.evaluate()
     print(result.summary())
 
