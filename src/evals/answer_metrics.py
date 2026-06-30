@@ -39,6 +39,19 @@ Evaluation: [How well does predicted match gold? What's correct/missing/wrong?]
 Rating: [1, 2, 3, or 4]"""
 
 
+ATTRIBUTION_PROPMT =
+f"""Given the following retrieved documents and a question, determine if the answer is supported/entailed by the content given the question.
+ 
+Question: {question}
+
+Retrieved Documents: {retrieved_content}
+ 
+Answer: {answer}
+ 
+Answer only with "Yes" or "No". The answer is supported if it can be inferred from the retrieved documents given the question.
+ 
+Answer:"""
+
 
 @dataclass
 class Answer_Metrics:
@@ -64,7 +77,8 @@ class Answer_Evaluator:
     """Compute answer correctness metrics"""
     def __init__(self,
                 compute_semantic_sas: bool = False,
-                compute_semantic_judge: bool = False):
+                compute_semantic_judge: bool = False,
+                compute_attribution:bool = False):
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         
         # SAS Model
@@ -76,6 +90,8 @@ class Answer_Evaluator:
         judge_model_name = "Qwen/Qwen2.5-3B-Instruct"
         self.judge_tokenizer,  self.judge_model = self._load_model(judge_model_name, is_causal=True)
         self.compute_semantic_judge = compute_semantic_judge
+
+        self.compute_attribution = compute_attribution
 
     def _load_model(self,
                     model_name:str,
@@ -197,12 +213,39 @@ class Answer_Evaluator:
 
     def eval_answer_attribution(self,
                                 question:str,
-                                retrieved_content:List[str],
+                                traj:List[dict],
                                 pred_answer:str) -> int:
+        retrieved_content = self._extract_content(traj)
+        if retrieved_content == '':
+            return 0
+        
+        prompt = ATTRIBUTION_PROPMT.format(
+                question=question,
+                retrieved_content=retrieved_content,
+                answer=pred_answer,
+            )
+            
+        inputs = self.judge_tokenizer(prompt, return_tensors="pt").to(self.device)
+        
+        with torch.no_grad():
+            outputs = self.judge_model.generate(
+                                **inputs,
+                                max_new_tokens=15,
+                                do_sample=False)
+            
+        response = self.judge_tokenizer.decode(
+                            outputs[0][inputs["input_ids"].shape[1]:],
+                            skip_special_tokens=True).strip()
+        # Parse response
+        if response.upper().startswith('YES'):
+            return 1
+        elif response.upper().startswith('NO'):
+            return 0
+        else:
+            return 0
 
-        return
     
-    def _extract_retrieved_content(self, trajectory: List[Dict]) -> str:
+    def _extract_content(self, trajectory: List[Dict]) -> str:
         """Extract all retrieved/searched content from trajectory"""
         content = []
         for msg in trajectory:
