@@ -1,4 +1,4 @@
-# A Simple Search-Agent (Under Development)
+# A Nano Search-Agent (Under Development)
 
 ## (SFT) Fine-Tuning Pipeline
  
