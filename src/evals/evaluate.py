@@ -19,6 +19,7 @@ class Eval_Result:
             'answer': self.answer.to_dict(),
             'trajectory': self.trajectory.to_dict(),
         }
+        
 
     def summary(self) -> str:
         """Human-readable summary"""
